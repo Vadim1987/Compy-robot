@@ -29,19 +29,21 @@ check("tiny time clamps to 1ms",
 
 check("speed out of range",
   errorOf(robot_move, 200, 0, 1),
-  "left wheel speed must be a number from -100 to 100")
+  "left wheel speed must be a number from -100 to 100, got 200")
+check("numeric strings accepted (console)",
+  robot_move("30", "30", "0.2"), true)
 check("speed wrong type",
   errorOf(robot_move, "fast", 0, 1),
-  "left wheel speed must be a number from -100 to 100")
+  "left wheel speed must be a number from -100 to 100, got fast")
 check("right side named",
   errorOf(robot_move, 0, -101, 1),
-  "right wheel speed must be a number from -100 to 100")
+  "right wheel speed must be a number from -100 to 100, got -101")
 check("zero seconds",
   errorOf(robot_move, 10, 10, 0),
-  "time must be a number of seconds up to 30")
+  "time must be a number of seconds up to 30, got 0")
 check("too long",
   errorOf(robot_move, 10, 10, 31),
-  "time must be a number of seconds up to 30")
+  "time must be a number of seconds up to 30, got 31")
 
 check("idle hook wired",
   type(LINE_READER_IDLE) == "nil", true)

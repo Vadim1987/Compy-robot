@@ -149,6 +149,7 @@ local function findEndpoints(env, dev)
     local cls = jniCallInt(env, iface, ifClass)
     if cls == USB_CLASS_CDC_COMM and not found.commId then
       found.commId = jniCallInt(env, iface, ifId)
+      found.comm = iface
     elseif cls == USB_CLASS_CDC_DATA and not found.data then
       found.data = iface
       for j = 0, jniCallInt(env, iface, epCount) - 1 do
@@ -175,20 +176,31 @@ local function byteArrayFrom(env, s)
 end
 
 --- CDC line coding: 115200 baud (LE), 1 stop, no parity,
---- 8 data bits -- then raise DTR/RTS. DAPLink forwards the
---- baud rate to the target UART, so the value matters.
+--- 8 data bits -- then raise DTR/RTS.
+---
+--- Both requests address the control interface, which is why
+--- that interface has to be claimed as well; without the claim
+--- Android refuses the transfer with -1.
+---
+--- Neither request is fatal. The micro:bit interface chip
+--- already runs its target UART at the protocol baud rate, and
+--- some stacks refuse these requests while the data path works
+--- perfectly. The PING handshake in robot_connect is the real
+--- test, so a refusal is recorded and reported only if the
+--- handshake then fails.
 local function configureAcm(env, port)
   local coding = string.char(0x00, 0xC2, 0x01, 0x00, 0, 0, 8)
   local arr = byteArrayFrom(env, coding)
   local rc = jniCallInt(env, port.conn, port.ctrlM,
     ACM_REQTYPE_CLASS_IFACE, ACM_SET_LINE_CODING, 0,
     port.commId, arr, #coding, ACM_CTRL_TIMEOUT_MS)
-  assert(rc >= 0, "SET_LINE_CODING failed: " .. rc)
   local rc2 = jniCallInt(env, port.conn, port.ctrlM,
     ACM_REQTYPE_CLASS_IFACE, ACM_SET_CONTROL_LINE_STATE,
     ACM_DTR_AND_RTS, port.commId, nil, 0,
     ACM_CTRL_TIMEOUT_MS)
-  assert(rc2 >= 0, "SET_CONTROL_LINE_STATE failed: " .. rc2)
+  if rc < 0 or rc2 < 0 then
+    port.acmRefused = "line coding " .. rc .. ", dtr " .. rc2
+  end
 end
 
 --- Open the robot over Android USB. Returns a port table
@@ -228,8 +240,8 @@ function usbAndroidFinishOpen(env, manager, dev)
   end
   local oke, eps = pcall(findEndpoints, env, dev)
   if not oke then return stageFail("endpoints", eps) end
-  if not (eps.data and eps.epIn and eps.epOut and eps.commId)
-  then
+  if not (eps.data and eps.comm and eps.epIn and eps.epOut
+      and eps.commId) then
     return stageFail("endpoints", "CDC set incomplete")
   end
   local connCls = jniClass(env,
@@ -248,9 +260,15 @@ function usbAndroidFinishOpen(env, manager, dev)
     ctrlM = jniMethod(env, connCls, "controlTransfer",
       "(IIII[BII)I"),
   }
+  -- Both interfaces: the data one carries the bulk endpoints,
+  -- the control one is the target of the ACM setup requests.
+  if not jniCallBool(env, port.conn, port.claimM,
+      eps.comm, true) then
+    return stageFail("claim", "control interface refused")
+  end
   if not jniCallBool(env, port.conn, port.claimM,
       eps.data, true) then
-    return stageFail("claim", "claimInterface refused")
+    return stageFail("claim", "data interface refused")
   end
   local okc, cerr = pcall(configureAcm, env, port)
   if not okc then return stageFail("acm", cerr) end

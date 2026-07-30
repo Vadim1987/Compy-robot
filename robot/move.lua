@@ -31,24 +31,42 @@ local function robotError(msg)
   error(msg, 0)
 end
 
+--- tonumber rather than a type check, so a value that reads
+--- as a number is accepted however it arrived. Rejections
+--- quote what came in: a child sees which of their arguments
+--- was wrong, and during bring-up it shows what the runtime
+--- actually passed.
 local function checkSpeed(value, side)
-  if type(value) ~= "number"
-      or value < -100 or value > 100 then
-    robotError(side .. " wheel speed must be a number "
-      .. "from -100 to 100")
+  local speed = tonumber(value)
+  if not speed or speed < -100 or speed > 100 then
+    robotError(side .. " wheel speed must be a number from "
+      .. "-100 to 100, got " .. tostring(value))
   end
-  return math.floor(value + 0.5)
+  return math.floor(speed + 0.5)
 end
 
 local function checkSeconds(value)
-  if type(value) ~= "number" or value <= 0
-      or value > ROBOT_SECONDS_MAX then
-    robotError("time must be a number of seconds "
-      .. "up to " .. ROBOT_SECONDS_MAX)
+  local seconds = tonumber(value)
+  if not seconds or seconds <= 0
+      or seconds > ROBOT_SECONDS_MAX then
+    robotError("time must be a number of seconds up to "
+      .. ROBOT_SECONDS_MAX .. ", got " .. tostring(value))
   end
-  local ms = math.floor(value * 1000 + 0.5)
+  local ms = math.floor(seconds * 1000 + 0.5)
   if ms < 1 then ms = 1 end
   return ms
+end
+
+--- Raise a kid-readable error for a port that opened but does
+--- not answer, naming a refused port setup when there was one
+--- since that is the likely cause.
+local function handshakeFailed(port)
+  local why = port.acmRefused
+      and (" (port setup refused: " .. port.acmRefused .. ")")
+      or ""
+  transportClose(port)
+  robotError("the robot is not answering, "
+    .. "check the cable and try again" .. why)
 end
 
 --- Open the transport and verify our firmware answers.
@@ -58,11 +76,8 @@ function robot_connect(dev)
   if not port then
     robotError("robot not connected (" .. err .. ")")
   end
-  local pong = transportCommand(port, "PING", 2)
-  if pong ~= "PONG" then
-    transportClose(port)
-    robotError("the robot is not answering, "
-      .. "check the cable and try again")
+  if transportCommand(port, "PING", 2) ~= "PONG" then
+    handshakeFailed(port)
   end
   robot_port = port
 end
